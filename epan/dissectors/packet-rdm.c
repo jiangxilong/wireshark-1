@@ -8,6 +8,9 @@
  *
  *  Shaun Jackman <sjackman@gmail.com>
  *  Copyright 2006 Pathway Connectivity
+ *  
+ *  Sean Sill <sms3h2@gmail.com>
+ *  Copyright 2013 Sean Sill
  *
  *  Wireshark - Network traffic analyzer
  *  Gerald Combs <gerald@wireshark.org>
@@ -38,6 +41,8 @@
  * discovery of devices on a DMX512/E1.11 network and the remote
  * setting of DMX starting addresses, as well as status and fault
  * reporting back to the control console.
+ *
+ * Todo: Add support for E1.33, and the newer rdm packets
  */
 
 #include "config.h"
@@ -64,6 +69,16 @@ static const value_string rdm_cc_vals[] = {
 	{ RDM_CC_GET_COMMAND_RESPONSE,		"Get Command Response" },
 	{ RDM_CC_SET_COMMAND,			"Set Command" },
 	{ RDM_CC_SET_COMMAND_RESPONSE,		"Set Command Response" },
+	{ 0, NULL },
+};
+
+static const value_string rdm_cc_abbv_vals[] = {
+	{ RDM_CC_DISCOVERY_COMMAND,		"Discovery" },
+	{ RDM_CC_DISCOVERY_COMMAND_RESPONSE,	"Discovery Response" },
+	{ RDM_CC_GET_COMMAND,			"Get" },
+	{ RDM_CC_GET_COMMAND_RESPONSE,		"Get Response" },
+	{ RDM_CC_SET_COMMAND,			"Set" },
+	{ RDM_CC_SET_COMMAND_RESPONSE,		"Set Response" },
 	{ 0, NULL },
 };
 
@@ -1759,15 +1774,19 @@ dissect_rdm_pd_preset_playback(tvbuff_t *tvb, guint offset, proto_tree *tree, gu
 }
 
 static guint
-dissect_rdm_mdb(tvbuff_t *tvb, guint offset, proto_tree *tree)
+dissect_rdm_mdb(tvbuff_t *tvb, packet_info *pinfo, guint offset, proto_tree *tree)
 {
 	guint8	    cc;
 	guint16	    param_id;
 	guint8	    parameter_data_length;
 	proto_tree *hi,*si, *mdb_tree;
-
-	cc = tvb_get_guint8(tvb, offset + 4);
-
+  const gchar* pid_name = NULL;
+  const gchar* cmd_name = NULL;  
+	
+  cc = tvb_get_guint8(tvb, offset + 4);
+  cmd_name = val_to_str(cc, rdm_cc_abbv_vals, "UNKNOWN COMMAND CLASS");
+  col_append_sep_str(pinfo->cinfo, COL_INFO, ": ", cmd_name);
+  
 	switch (cc) {
 	case RDM_CC_DISCOVERY_COMMAND:
 	case RDM_CC_GET_COMMAND:
@@ -1807,7 +1826,10 @@ dissect_rdm_mdb(tvbuff_t *tvb, guint offset, proto_tree *tree)
 	proto_tree_add_item(mdb_tree, hf_rdm_parameter_id, tvb,
 			offset, 2, ENC_BIG_ENDIAN);
 	offset += 2;
-
+  
+  pid_name = val_to_str(param_id, rdm_param_id_vals, "UNKNOWN PID");
+  col_append_sep_str(pinfo->cinfo, COL_INFO, ", ", pid_name);
+  
 	parameter_data_length = tvb_get_guint8(tvb, offset);
 	proto_tree_add_item(mdb_tree, hf_rdm_parameter_data_length, tvb,
 			offset, 1, ENC_BIG_ENDIAN);
@@ -2042,8 +2064,8 @@ dissect_rdm_mdb(tvbuff_t *tvb, guint offset, proto_tree *tree)
 static void
 dissect_rdm(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 {
-	col_set_str(pinfo->cinfo, COL_PROTOCOL, "RDM");
-	col_clear(pinfo->cinfo, COL_INFO);
+	col_append_str(pinfo->cinfo, COL_PROTOCOL, " - RDM");
+	//col_clear(pinfo->cinfo, COL_INFO);
 
 	if (tree) {
 		gint	    padding_size;
@@ -2085,7 +2107,7 @@ dissect_rdm(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 				offset, 1, ENC_BIG_ENDIAN);
 		offset += 1;
 
-		offset = dissect_rdm_mdb(tvb, offset, rdm_tree);
+		offset = dissect_rdm_mdb(tvb, pinfo, offset, rdm_tree);
 
 		padding_size = offset - (message_length - 1);
 		if (padding_size > 0) {

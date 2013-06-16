@@ -33,6 +33,9 @@
 
       Build CID to "Name" table from file so we can display real names
       rather than CIDs
+      
+      Break the different dissectors into seperate protocols so that you can 
+      filter on acn, sacn, and rdmnet
  */
 
 /* Include files */
@@ -45,6 +48,7 @@
 #include <epan/prefs.h>
 #include <epan/ipv6-utils.h>
 #include <epan/to_str.h>
+#include "packet-tcp.h"
 
 /* Forward declarations */
 void proto_register_acn(void);
@@ -92,7 +96,7 @@ void proto_reg_handoff_acn(void);
 #define ACN_PROTOCOL_ID_DMX           3
 #define ACN_PROTOCOL_ID_DMX_2         4
 #define ACN_PROTOCOL_ID_RDMNET        5
-#define ACN_PROTOCOL_NULL             6
+#define ACN_PROTOCOL_ID_NULL          6
 
 #define ACN_ADDR_NULL                 0
 #define ACN_ADDR_IPV4                 1
@@ -206,6 +210,9 @@ void proto_reg_handoff_acn(void);
 #define ACN_E133_STATUS_ACK_OVERFLOW_IN_PROGRESS        8
 #define ACN_E133_STATUS_BROADCAST_COMPLETE              9
 
+/*ACN over TCP*/
+#define ACN_TCP_PREAMBLE_SIZE 20
+
 typedef struct
 {
   guint32 start;
@@ -229,13 +236,14 @@ typedef struct
  * See
  * ANSI BSR E1.17 Architecture for Control Networks
  * ANSI BSR E1.31
- * Plasa E1.33 <- Protocol is currently being writtne
+ * Plasa E1.33 <- Protocol is currently being written
  */
 
 #define ACTUAL_ADDRESS  0
 /* forward reference */
 static guint32 acn_add_address(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tree, int offset, const char *label);
 static int     dissect_acn(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree);
+static int     dissect_acn_tcp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree);
 
 /* Global variables */
 static int proto_acn = -1;
@@ -255,6 +263,8 @@ static gint ett_acn_dmx_address = -1;
 static gint ett_acn_dmx_2_options = -1;
 static gint ett_acn_dmx_data_pdu = -1;
 static gint ett_acn_dmx_pdu = -1;
+
+static gint ett_acn_rdmnet = -1;
 
 /*Dissector Handles*/
 static dissector_handle_t rdm_handle;
@@ -294,6 +304,7 @@ static int hf_acn_nak_modulus = -1;
 static int hf_acn_nak_outbound_flag = -1;
 static int hf_acn_oldest_available_wrapper = -1;
 static int hf_acn_packet_identifier = -1;
+static int hf_acn_pdu_block_size = -1;
 static int hf_acn_pdu = -1;
 static int hf_acn_pdu_flag_d = -1;
 static int hf_acn_pdu_flag_h = -1;
@@ -305,6 +316,7 @@ static int hf_acn_port = -1;
 static int hf_acn_postamble_size = -1;
 static int hf_acn_preamble_size = -1;
 static int hf_acn_protocol_id = -1;
+static int hf_acn_rdmnet = -1;
 static int hf_acn_rdmnet_framing_vector = -1;
 static int hf_acn_rdmnet_source_name = -1;
 static int hf_acn_rdmnet_sequence_num = -1;
@@ -312,6 +324,7 @@ static int hf_acn_rdmnet_endpoint_num = -1;
 static int hf_acn_rdmnet_reserved = -1;
 static int hf_acn_rdmnet_data_vector = -1;
 static int hf_acn_rdmnet_status = -1;
+static int hf_acn_rdmnet_status_str = -1;
 static int hf_acn_reason_code = -1;
 static int hf_acn_reciprocal_channel = -1;
 static int hf_acn_refuse_code = -1;
@@ -354,6 +367,7 @@ static const value_string acn_protocol_id_vals[] = {
   { ACN_PROTOCOL_ID_DMX, "DMX Protocol" },
   { ACN_PROTOCOL_ID_RDMNET, "RDMNet Protocol" },
   { ACN_PROTOCOL_ID_DMX_2, "Ratified DMX Protocol" },
+  { ACN_PROTOCOL_ID_NULL, "Null, Can be used as Health Check" },
   { 0,       NULL },
 };
 
@@ -555,6 +569,35 @@ dissect_acn_heur( tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *dat
 
   /* else, dissect it */
   dissect_acn(tvb, pinfo, tree);
+  return TRUE;
+}
+
+/******************************************************************************/
+/* This function returns the PDU Block size from the TCP Preample             */
+static guint32 acn_get_tcp_packet_size(packet_info* pinfo, tvbuff_t *tvb, int offset)
+{
+  return tvb_get_ntohl(tvb, offset + 16) + ACN_TCP_PREAMBLE_SIZE;
+}
+
+/******************************************************************************/
+/* Heuristic dissector                                                        */
+static gboolean
+dissect_acn_heur_tcp( tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_ )
+{
+  /* This is a heuristic dissector, which means we get all the UDP
+   * traffic not sent to a known dissector and not claimed by
+   * a heuristic dissector called before us!
+   */
+
+  /* abort if not enabled! */
+  if (!global_acn_heur) return FALSE;
+
+  /* abort if it is NOT an ACN packet */
+  if (!is_acn(tvb)) return FALSE;
+
+  /* else, dissect it */
+  tcp_dissect_pdus(tvb, pinfo, tree, TRUE, ACN_TCP_PREAMBLE_SIZE, 
+                   &acn_get_tcp_packet_size, dissect_acn_tcp);
   return TRUE;
 }
 
@@ -2623,7 +2666,8 @@ dissect_acn_rdmnet_status_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
 
 /* this pdu */
   guint16          status_code;
-
+  guint8          *status_str = NULL;
+  
   /* save start of pdu block */
   pdu_start = offset;
   pdu_offsets.start = pdu_start;
@@ -2650,7 +2694,8 @@ dissect_acn_rdmnet_status_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
 
   /* Add pdu item and tree */
   ti = proto_tree_add_item(tree, hf_acn_pdu, tvb, pdu_start, pdu_length, ENC_NA);
-  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu);
+  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu); /* todo: Change to ett rdmnet pdu */
+  col_add_str(pinfo->cinfo, COL_INFO, "Status");
 
   /* Add flag item and tree */
   pi = proto_tree_add_uint(pdu_tree, hf_acn_pdu_flags, tvb, pdu_start, 1, pdu_flags);
@@ -2680,14 +2725,15 @@ dissect_acn_rdmnet_status_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
   /* Add Vector item */
   status_code = tvb_get_ntohs(tvb, vector_offset);
   proto_tree_add_item(pdu_tree, hf_acn_rdmnet_status, tvb, vector_offset, 2, ENC_BIG_ENDIAN);
-  /* vector_offset +=4; */
+  vector_offset += 2;
 
   /* Add Vector item to tree*/
   name = val_to_str(status_code, acn_rdmnet_status_vals, "not valid (%d)");
   proto_item_append_text(ti, ": %s", name);
-  
- /*Now get the status string*/
-  
+  /* Lets tell people that its an RDMNet Status PDU*/
+  col_append_sep_str(pinfo->cinfo, COL_INFO, ": ", name);
+ 
+  /*Now get the status string*/
   /* Adjust data */
   if (pdu_flags & ACN_PDU_FLAG_D) {
     /* use new values */
@@ -2702,16 +2748,26 @@ dissect_acn_rdmnet_status_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
   }
   
   if(data_length > 0){
-    proto_tree_add_string(pdu_tree, hf_acn_rdmnet_status, tvb, data_offset, data_length, "");
+    proto_tree_add_item(pdu_tree, hf_acn_rdmnet_status_str, tvb, data_offset, data_length, ENC_ASCII);
+    
+    status_str = tvb_get_string(tvb, data_offset, data_length);
+    if(status_str) {
+      col_append_sep_str(pinfo->cinfo, COL_INFO, ", ", status_str);
+      g_free(status_str);
+    }
   }
-  
   return pdu_start + pdu_length;
 }
 
 /******************************************************************************/
 /* Dissect RDMNet Data Layer                                                  */
 static guint32
-dissect_acn_rdmnet_data_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, acn_pdu_offsets *last_pdu_offsets)
+dissect_acn_rdmnet_data_pdu(tvbuff_t *tvb, 
+                            packet_info *pinfo, 
+                            proto_tree *tree, 
+                            int offset, 
+                            acn_pdu_offsets *last_pdu_offsets,
+                            proto_tree *base_tree)
 {
   /* common to all pdu */
   guint8           pdu_flags;
@@ -2733,7 +2789,7 @@ dissect_acn_rdmnet_data_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
   proto_tree      *flag_tree   = NULL;
 
   const char      *name;
-
+  
 /* this pdu */
   guint8          vector;
 
@@ -2763,7 +2819,7 @@ dissect_acn_rdmnet_data_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
 
   /* Add pdu item and tree */
   ti = proto_tree_add_item(tree, hf_acn_pdu, tvb, pdu_start, pdu_length, ENC_NA);
-  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu);
+  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu); /* todo: Change to ett rdmnet pdu */
 
   /* Add flag item and tree */
   pi = proto_tree_add_uint(pdu_tree, hf_acn_pdu_flags, tvb, pdu_start, 1, pdu_flags);
@@ -2815,10 +2871,17 @@ dissect_acn_rdmnet_data_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
     /*data_length = last_pdu_offsets->data_length;*/
   }
 
+  /* Lets tell people that its an RDMNet Data PDU*/
+  
+  col_add_str(pinfo->cinfo, COL_INFO, "RDM Data");
+  
   /* Now we can send the data off to the RDM layer */
   tvb_rdm = tvb_new_subset_remaining(tvb, data_offset);
   if(rdm_handle){
-    call_dissector(rdm_handle, tvb_rdm, pinfo, tree);
+    call_dissector(rdm_handle, tvb_rdm, pinfo, base_tree);
+    
+    /* Set the protocol column */
+    col_add_str(pinfo->cinfo, COL_PROTOCOL, "RDMNet");
   }
   /* process based on vector */
   return pdu_start + pdu_length;
@@ -2827,7 +2890,12 @@ dissect_acn_rdmnet_data_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree,
 /******************************************************************************/
 /* Dissect RDMNet Framing Layer                                               */
 static guint32
-dissect_acn_rdmnet_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, acn_pdu_offsets *last_pdu_offsets)
+dissect_acn_rdmnet_pdu(tvbuff_t *tvb, 
+                       packet_info *pinfo, 
+                       proto_tree *tree, 
+                       int offset, 
+                       acn_pdu_offsets *last_pdu_offsets, 
+                       proto_tree *base_tree)
 {
   /* common to all pdu */
   guint8           pdu_flags;
@@ -2879,11 +2947,12 @@ dissect_acn_rdmnet_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int 
 
   /* Add pdu item and tree */
   ti = proto_tree_add_item(tree, hf_acn_pdu, tvb, pdu_start, pdu_length, ENC_NA);
-  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu);
+  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu); /* todo: Change to ett rdmnet pdu */
 
   /* Add flag item and tree */
   pi = proto_tree_add_uint(pdu_tree, hf_acn_pdu_flags, tvb, pdu_start, 1, pdu_flags);
-  flag_tree = proto_item_add_subtree(pi, ett_acn_pdu_flags);
+  flag_tree = proto_item_add_subtree(pi, ett_acn_pdu_flags); /* todo: Check on this as well */
+  
   proto_tree_add_item(flag_tree, hf_acn_pdu_flag_l, tvb, pdu_start, 1, ENC_BIG_ENDIAN);
   proto_tree_add_item(flag_tree, hf_acn_pdu_flag_v, tvb, pdu_start, 1, ENC_BIG_ENDIAN);
   proto_tree_add_item(flag_tree, hf_acn_pdu_flag_h, tvb, pdu_start, 1, ENC_BIG_ENDIAN);
@@ -2958,7 +3027,7 @@ dissect_acn_rdmnet_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int 
   /* Now we can send the data off to the RDMNet Data layer */
   switch(vector){
     case ACN_E133_FRAMING_RDMNET: 
-      data_offset = dissect_acn_rdmnet_data_pdu(tvb, pinfo, pdu_tree, data_offset, &pdu_offsets);
+      data_offset = dissect_acn_rdmnet_data_pdu(tvb, pinfo, pdu_tree, data_offset, &pdu_offsets, base_tree);
       break;
     case ACN_E133_FRAMING_STATUS:
       data_offset = dissect_acn_rdmnet_status_pdu(tvb, pinfo, pdu_tree, data_offset, &pdu_offsets);
@@ -2972,7 +3041,12 @@ dissect_acn_rdmnet_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int 
 /******************************************************************************/
 /* Dissect Root PDU                                                           */
 static guint32
-dissect_acn_root_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, acn_pdu_offsets *last_pdu_offsets)
+dissect_acn_root_pdu(tvbuff_t *tvb, 
+                     packet_info *pinfo, 
+                     proto_tree *tree, 
+                     int offset, 
+                     acn_pdu_offsets *last_pdu_offsets, 
+                     proto_tree *base_tree)
 {
   /* common to all pdu */
   guint8           pdu_flags;
@@ -3061,7 +3135,8 @@ dissect_acn_root_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int of
     case ACN_PROTOCOL_ID_RDMNET:
         if(global_acn_rdmnet){
             proto_item_append_text(ti,": RDMNet");
-            
+            /* Set the protocol column */
+            col_add_str(pinfo->cinfo, COL_PROTOCOL, "RDMNet");
             /* Set header offset */
             if (pdu_flags & ACN_PDU_FLAG_H) {
               /* use new values */
@@ -3104,7 +3179,7 @@ dissect_acn_root_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int of
             /* adjust for what we used */
             while (data_offset < end_offset) {
               old_offset = data_offset;
-              data_offset = dissect_acn_rdmnet_pdu(tvb, pinfo, pdu_tree, data_offset, &pdu_offsets);
+              data_offset = dissect_acn_rdmnet_pdu(tvb, pinfo, pdu_tree, data_offset, &pdu_offsets, base_tree);
               if (data_offset == old_offset) break;
             }
             
@@ -3205,6 +3280,8 @@ dissect_acn_root_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int of
         if (data_offset == old_offset) break;
       }
       break;
+    case ACN_PROTOCOL_ID_NULL:
+      break;
   }
 
   return pdu_start + pdu_length;
@@ -3231,7 +3308,8 @@ dissect_acn(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 
   col_add_fstr(pinfo->cinfo,COL_INFO, "ACN [Src Port: %d, Dst Port: %d]", pinfo->srcport, pinfo->destport );
 
-  if (tree) { /* we are being asked for details */
+  /*if (tree) { /* we are being asked for details */
+  /*T*/
     ti = proto_tree_add_item(tree, proto_acn, tvb, 0, -1, ENC_NA);
     acn_tree = proto_item_add_subtree(ti, ett_acn);
 
@@ -3247,7 +3325,53 @@ dissect_acn(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
     end_offset = data_offset + tvb_reported_length_remaining(tvb, data_offset);
     while (data_offset < end_offset) {
       old_offset = data_offset;
-      data_offset = dissect_acn_root_pdu(tvb, pinfo, acn_tree, data_offset, &pdu_offsets);
+      data_offset = dissect_acn_root_pdu(tvb, pinfo, acn_tree, data_offset, &pdu_offsets, tree);
+      if (data_offset == old_offset) break;
+    }
+  //}
+  return tvb_length(tvb);
+}
+
+/******************************************************************************/
+/* Dissect ACN                                                                */
+static int
+dissect_acn_tcp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
+{
+  proto_item      *ti          = NULL;
+  proto_tree      *acn_tree    = NULL;
+  guint32          data_offset = 0;
+  guint32          old_offset;
+  guint32          end_offset;
+  acn_pdu_offsets  pdu_offsets = {0,0,0,0,0};
+
+/*   if (!is_acn(tvb)) { */
+/*     return 0;         */
+/*   }                   */
+
+  /* Set the protocol column */
+  col_add_str(pinfo->cinfo, COL_PROTOCOL, "ACN");
+ 
+  col_add_str(pinfo->cinfo,COL_INFO, "ACN over TCP");
+  //col_add_fstr(pinfo->cinfo,COL_INFO, "ACN [Src Port: %d, Dst Port: %d]", pinfo->srcport, pinfo->destport )
+  
+  if (tree) { /* we are being asked for details */
+    ti = proto_tree_add_item(tree, proto_acn, tvb, 0, -1, ENC_NA);
+    acn_tree = proto_item_add_subtree(ti, ett_acn);
+
+    /* add preamble, postamble and ACN Packet ID */
+    proto_tree_add_item(acn_tree, hf_acn_preamble_size, tvb, data_offset, 2, ENC_BIG_ENDIAN);
+    data_offset += 2;
+    proto_tree_add_item(acn_tree, hf_acn_postamble_size, tvb, data_offset, 2, ENC_BIG_ENDIAN);
+    data_offset += 2;
+    proto_tree_add_item(acn_tree, hf_acn_packet_identifier, tvb, data_offset, 12, ENC_UTF_8|ENC_NA);
+    data_offset += 12;
+    proto_tree_add_item(acn_tree, hf_acn_pdu_block_size, tvb, data_offset, 4, ENC_BIG_ENDIAN);
+    data_offset += 4;
+    /* one past the last byte */
+    end_offset = data_offset + tvb_reported_length_remaining(tvb, data_offset);
+    while (data_offset < end_offset) {
+      old_offset = data_offset;
+      data_offset = dissect_acn_root_pdu(tvb, pinfo, acn_tree, data_offset, &pdu_offsets, tree);
       if (data_offset == old_offset) break;
     }
   }
@@ -3453,7 +3577,7 @@ proto_register_acn(void)
         FT_UINT32, BASE_DEC_HEX, NULL, 0x0,
         NULL, HFILL }
     },
-    /* Preamble Sizet */
+    /* Preamble Size */
     { &hf_acn_preamble_size,
       { "Size of preamble", "acn.preamble_size",
         FT_UINT16, BASE_DEC, NULL, 0x0,
@@ -3464,6 +3588,12 @@ proto_register_acn(void)
       { "Packet Identifier", "acn.packet_identifier",
         FT_STRING, BASE_NONE, NULL, 0x0,
         NULL, HFILL }
+    },
+    /* Packet Identifier */
+    { &hf_acn_pdu_block_size,
+      { "PDU Block Size", "acn.pdu_block_size",
+        FT_UINT32, BASE_DEC, NULL, 0x0,
+        "PDU Block in bytes", HFILL }
     },
     /* PDU */
     { &hf_acn_pdu,
@@ -3523,6 +3653,13 @@ proto_register_acn(void)
     },
     
     /* RDMNet Data Vector*/
+    { &hf_acn_rdmnet,
+      { "RDMNet", "rdmnet",
+        FT_PROTOCOL, BASE_NONE, NULL, 0x0,
+        NULL, HFILL }
+    },
+    
+    /* RDMNet Data Vector*/
     { &hf_acn_rdmnet_data_vector,
       { "Vector", "acn.rdmnet.data_vector",
         FT_UINT8, BASE_DEC, VALS(acn_rdmnet_data_vector_vals), 0x0,
@@ -3561,6 +3698,13 @@ proto_register_acn(void)
     { &hf_acn_rdmnet_status,
       { "Status Number", "acn.rdmnet.status",
         FT_UINT16, BASE_DEC, VALS(acn_rdmnet_status_vals), 0x0,
+        NULL, HFILL }
+    },
+    
+    /*RDMNet Status String*/
+    { &hf_acn_rdmnet_status_str,
+      { "Status String", "acn.rdmnet.status_string",
+        FT_STRING, BASE_NONE, NULL, 0x0,
         NULL, HFILL }
     },
     
@@ -3731,7 +3875,8 @@ proto_register_acn(void)
     &ett_acn_dmx_address,
     &ett_acn_dmx_2_options,
     &ett_acn_dmx_data_pdu,
-    &ett_acn_dmx_pdu
+    &ett_acn_dmx_pdu//,
+    //&ett_acn_rdmnet
   };
 
   module_t *acn_module;
@@ -3797,6 +3942,9 @@ proto_reg_handoff_acn(void)
   /* acn_handle = new_create_dissector_handle(dissect_acn, proto_acn); */
   /* dissector_add_for_decode_as("udp.port", acn_handle);                         */
   heur_dissector_add("udp", dissect_acn_heur, proto_acn);
+  
+  /*Experimental support for RDMNet TCP*/
+  heur_dissector_add("tcp", dissect_acn_heur_tcp, proto_acn);
   /*Lets find the packet-rdm.c dissector for RDMNet*/
   rdm_handle = find_dissector("rdm");
   return;

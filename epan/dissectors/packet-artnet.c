@@ -2012,7 +2012,11 @@ dissect_artnet_tod_control(tvbuff_t *tvb, guint offset, proto_tree *tree)
 }
 
 static guint
-dissect_artnet_rdm(tvbuff_t *tvb, guint offset, proto_tree *tree,  packet_info *pinfo, proto_tree *base_tree)
+dissect_artnet_rdm(tvbuff_t *tvb, 
+                   guint offset, 
+                   proto_tree *tree,  
+                   packet_info *pinfo, 
+                   proto_tree *base_tree)
 {
   guint8    rdmver;
   guint8    sc;

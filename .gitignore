@@ -26,6 +26,9 @@
 *_dict.c
 *_lex.h
 init.lua
+*.lib
+*.pdb
+*.exp
 epan/declare_wslua.h
 epan/dissectors/dcerpc/idl2wrs
 epan/dissectors/mesa
@@ -59,6 +62,7 @@ wiretap/ascend.h
 wiretap/k12text.c
 wireshark-tap-register.c
 wireshark-tap-register-cache.pkl
+*.ilk
 
 # Generated makefile system #
 #############################
@@ -101,7 +105,7 @@ tvbtest
 wireshark
 wmem_test
 ylwrap
-
+*.pri
 
 # CMake #
 ##################
@@ -210,3 +214,5 @@ packaging/macosx/Wireshark_package.pmdoc/index.xml
 packaging/rpm/SPECS/wireshark.spec
 packaging/svr4/checkinstall
 packaging/svr4/pkginfo
+*.rc
+*.res
