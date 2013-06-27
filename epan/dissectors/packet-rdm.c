@@ -43,6 +43,7 @@
  * reporting back to the control console.
  *
  * Todo: Add support for E1.33, and the newer rdm packets
+ * Add expert info columns to point out malformed packets
  */
 
 #include "config.h"
@@ -148,6 +149,29 @@ static const value_string rdm_rt_vals[] = {
 #define RDM_PARAM_ID_CAPTURE_PRESET			0x1030
 #define RDM_PARAM_ID_PRESET_PLAYBACK			0x1031
 
+// E1.33 RDMNet PIDS
+#define RDM_PARAM_ID_ENDPOINT_LIST        0x7FE0
+#define RDM_PARAM_ID_ENDPOINT_LIST_CHANGE       0x7FEE
+#define RDM_PARAM_ID_ENDPOINT_IDENTIFY        0x7FE9
+#define RDM_PARAM_ID_ENDPOINT_TO_UNIVERSE       0x7FE1
+#define RDM_PARAM_ID_RDM_TRAFFIC_ENABLE       0x7FE2
+#define RDM_PARAM_ID_ENDPOINT_MODE        0x7FE3
+#define RDM_PARAM_ID_ENDPOINT_LABEL       0x7FE4
+#define RDM_PARAM_ID_DISCOVERY_STATE      0x7FE5
+#define RDM_PARAM_ID_BACKGROUND_DISCOVERY       0x7FEA
+#define RDM_PARAM_ID_ENDPOINT_TIMING        0x7E6
+#define RDM_PARAM_ID_ENDPOINT_TIMING_DESCRIPTION        0x7FE7
+#define RDM_PARAM_ID_ENDPOINT_DEVICE_LIST_CHANGE        0x7FEB
+#define RDM_PARAM_ID_ENDPOINT_DEVICES       0x7FEC
+#define RDM_PARAM_ID_BINDING_AND_CONTROL_FIELDS       0x7E8
+#define RDM_PARAM_ID_TCP_COMMS_STATUS       0x7FED
+#define RDM_PARAM_ID_BACKGROUND_QUEUED_STATUS_POLICY        0x7FD0
+#define RDM_PARAM_ID_BACKGROUND_QUEUED_STATUS_POLICY_DESCRIPTION        0x7FD1
+#define RDM_PARAM_ID_BACKGROUND_STATUS_TYPE       0x7FD2
+#define RDM_PARAM_ID_QUEUED_STATUS_ENDPOINT_COLLECTION        0x7FD3
+#define RDM_PARAM_ID_QUEUED_STATUS_UID_COLLECTION       0x7FD4
+
+
 static const value_string rdm_param_id_vals[] = {
 	{ RDM_PARAM_ID_DISC_UNIQUE_BRANCH,		   "DISC_UNIQUE_BRANCH" },
 	{ RDM_PARAM_ID_DISC_MUTE,			   "DISC_MUTE" },
@@ -172,9 +196,9 @@ static const value_string rdm_param_id_vals[] = {
 	{ RDM_PARAM_ID_LANGUAGE,			   "LANGUAGE" },
 	{ RDM_PARAM_ID_SOFTWARE_VERSION_LABEL,		   "SOFTWARE_VERSION_LABEL" },
 	{ RDM_PARAM_ID_BOOT_SOFTWARE_VERSION_ID,	   "BOOT_SOFTWARE_VERSION_ID" },
-	{ RDM_PARAM_ID_BOOT_SOFTWARE_VERSION_LABEL,	   "BOOT_SOFTWARE_VERSION_LABEL" },
+	{ RDM_PARAM_ID_BOOT_SOFTWARE_VERSION_LABEL,    "BOOT_SOFTWARE_VERSION_LABEL" },
 	{ RDM_PARAM_ID_DMX_PERSONALITY,			   "DMX_PERSONALITY" },
-	{ RDM_PARAM_ID_DMX_PERSONALITY_DESCRIPTION,	   "DMX_PERSONALITY_DESCRIPTION" },
+	{ RDM_PARAM_ID_DMX_PERSONALITY_DESCRIPTION,	  "DMX_PERSONALITY_DESCRIPTION" },
 	{ RDM_PARAM_ID_DMX_START_ADDRESS,		   "DMX_START_ADDRESS" },
 	{ RDM_PARAM_ID_SLOT_INFO,			   "SLOT_INFO" },
 	{ RDM_PARAM_ID_SLOT_DESCRIPTION,		   "SLOT_DESCRIPTION" },
@@ -201,6 +225,29 @@ static const value_string rdm_param_id_vals[] = {
 	{ RDM_PARAM_ID_SELF_TEST_DESCRIPTION,		   "SELF_TEST_DESCRIPTION" },
 	{ RDM_PARAM_ID_CAPTURE_PRESET,			   "CAPTURE_PRESET" },
 	{ RDM_PARAM_ID_PRESET_PLAYBACK,			   "PRESET_PLAYBACK" },
+  //RDMNet Pids
+  { RDM_PARAM_ID_ENDPOINT_LIST,  "ENDPOINT_LIST" },
+  { RDM_PARAM_ID_ENDPOINT_LIST_CHANGE, "ENDPOINT_LIST_CHANGE" },
+  { RDM_PARAM_ID_ENDPOINT_IDENTIFY, "ENDPOINT_IDENTIFY" },
+  { RDM_PARAM_ID_ENDPOINT_TO_UNIVERSE, "ENDPOINT_TO_UNIVERSE" },
+  { RDM_PARAM_ID_RDM_TRAFFIC_ENABLE, "RDM_TRAFFIC_ENABLE" },
+  { RDM_PARAM_ID_ENDPOINT_MODE, "ENDPOINT_MODE" },
+  { RDM_PARAM_ID_ENDPOINT_LABEL, "ENDPOINT_LABEL" },
+  { RDM_PARAM_ID_DISCOVERY_STATE, "DISCOVERY_STATE" },
+  { RDM_PARAM_ID_BACKGROUND_DISCOVERY, "BACKGROUND_DISCOVERY" },
+  { RDM_PARAM_ID_ENDPOINT_TIMING, "ENDPOINT_TIMING" },
+  { RDM_PARAM_ID_ENDPOINT_TIMING_DESCRIPTION, "ENDPOINT_TIMING_DESCRIPTION" },
+  { RDM_PARAM_ID_ENDPOINT_DEVICE_LIST_CHANGE, "DEVICE_LIST_CHANGE" },
+  { RDM_PARAM_ID_ENDPOINT_DEVICES, "ENDPOINT_DEVICES" },
+  { RDM_PARAM_ID_BINDING_AND_CONTROL_FIELDS, "BINDING_AND_CONTROL_FIELDS" },
+  { RDM_PARAM_ID_TCP_COMMS_STATUS, "TCP_COMMS_STATUS" },
+  { RDM_PARAM_ID_BACKGROUND_QUEUED_STATUS_POLICY, "QUEUED_STATUS_POLICY" },
+  { RDM_PARAM_ID_BACKGROUND_QUEUED_STATUS_POLICY_DESCRIPTION, 
+      "QUEUED_STATUS_POLICY_DESCRIPTION" },
+  { RDM_PARAM_ID_BACKGROUND_STATUS_TYPE, "BACKGROUND_STATUS_TYPE" },
+  { RDM_PARAM_ID_QUEUED_STATUS_ENDPOINT_COLLECTION, 
+      "QUEUED_STATUS_ENDPOINT_COLLECTION" },
+  { RDM_PARAM_ID_QUEUED_STATUS_UID_COLLECTION, "STATUS_UID_COLLECTION" },
 	{ 0, NULL },
 };
 static value_string_ext rdm_param_id_vals_ext = VALUE_STRING_EXT_INIT(rdm_param_id_vals);
@@ -266,7 +313,8 @@ static const value_string rdm_prefix_vals[] = {
 	{ RDM_PREFIX_YOTTA,	"yotta (x10^24)" },
 	{ 0, NULL },
 };
-static value_string_ext rdm_prefix_vals_ext = VALUE_STRING_EXT_INIT(rdm_prefix_vals);
+static value_string_ext rdm_prefix_vals_ext = 
+    VALUE_STRING_EXT_INIT(rdm_prefix_vals);
 
 #define RDM_UNITS_NONE			      0x00
 #define RDM_UNITS_CENTIGRADE		      0x01
@@ -330,7 +378,8 @@ static const value_string rdm_unit_vals[] = {
 	{ RDM_UNITS_BYTE,			 "Byte" },
 	{ 0, NULL },
 };
-static value_string_ext rdm_unit_vals_ext = VALUE_STRING_EXT_INIT(rdm_unit_vals);
+static value_string_ext rdm_unit_vals_ext = 
+    VALUE_STRING_EXT_INIT(rdm_unit_vals);
 
 #define RDM_SENS_TEMPERATURE	    0x00
 #define RDM_SENS_VOLTAGE	    0x01
@@ -404,7 +453,8 @@ static const value_string rdm_sensor_type_vals[] = {
 	{ RDM_SENS_OTHER,		"Other" },
 	{ 0, NULL} ,
 };
-static value_string_ext rdm_sensor_type_vals_ext = VALUE_STRING_EXT_INIT(rdm_sensor_type_vals);
+static value_string_ext rdm_sensor_type_vals_ext = 
+    VALUE_STRING_EXT_INIT(rdm_sensor_type_vals);
 
 #define RDM_PRODUCT_CATEGORY_NOT_DECLARED		0x0000
 #define RDM_PRODUCT_CATEGORY_FIXTURE			0x0100
@@ -532,7 +582,8 @@ static const value_string rdm_product_cat_vals[] = {
 	{ RDM_PRODUCT_CATEGORY_OTHER,			 "Other" },
 	{ 0, NULL },
 };
-static value_string_ext rdm_product_cat_vals_ext = VALUE_STRING_EXT_INIT(rdm_product_cat_vals);
+static value_string_ext rdm_product_cat_vals_ext = 
+    VALUE_STRING_EXT_INIT(rdm_product_cat_vals);
 
 static int proto_rdm = -1;
 
@@ -675,6 +726,14 @@ static int hf_rdm_pd_slot_description = -1;
 static int hf_rdm_pd_slot_value = -1;
 static int hf_rdm_pd_rec_value_support = -1;
 
+
+static int hf_rdm_pd_endpoint_list_change_number = -1;
+static int hf_rdm_pd_endpoint_list = -1;
+static int hf_rdm_pd_endpoint = -1;
+static int hf_rdm_pd_universe = -1;
+static int hf_rdm_pd_endpoint_physical = -1;
+
+
 static int ett_rdm = -1;
 
 static guint16
@@ -688,7 +747,8 @@ rdm_checksum(tvbuff_t *tvb, guint length)
 }
 
 static guint
-dissect_rdm_pd_queued_message(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_queued_message(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                              guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -702,7 +762,8 @@ dissect_rdm_pd_queued_message(tvbuff_t *tvb, guint offset, proto_tree *tree, gui
 }
 
 static guint
-dissect_rdm_pd_dmx_start_address(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_dmx_start_address(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                                 guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -717,7 +778,8 @@ dissect_rdm_pd_dmx_start_address(tvbuff_t *tvb, guint offset, proto_tree *tree, 
 }
 
 static guint
-dissect_rdm_pd_device_info(tvbuff_t *tvb _U_, guint offset, proto_tree *tree _U_, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_device_info(tvbuff_t *tvb _U_, guint offset, 
+                           proto_tree *tree _U_, guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -769,7 +831,8 @@ dissect_rdm_pd_device_info(tvbuff_t *tvb _U_, guint offset, proto_tree *tree _U_
 
 
 static guint
-dissect_rdm_pd_device_model_description(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_device_model_description(tvbuff_t *tvb, guint offset, 
+                                        proto_tree *tree, guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -784,7 +847,8 @@ dissect_rdm_pd_device_model_description(tvbuff_t *tvb, guint offset, proto_tree 
 
 
 static guint
-dissect_rdm_pd_device_label(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_device_label(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                            guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -800,7 +864,8 @@ dissect_rdm_pd_device_label(tvbuff_t *tvb, guint offset, proto_tree *tree, guint
 
 
 static guint
-dissect_rdm_pd_device_hours(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_device_hours(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                            guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -816,7 +881,8 @@ dissect_rdm_pd_device_hours(tvbuff_t *tvb, guint offset, proto_tree *tree, guint
 
 
 static guint
-dissect_rdm_pd_lamp_hours(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_lamp_hours(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                          guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -832,7 +898,8 @@ dissect_rdm_pd_lamp_hours(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 
 
 
 static guint
-dissect_rdm_pd_lamp_strikes(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_lamp_strikes(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                            guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -848,7 +915,8 @@ dissect_rdm_pd_lamp_strikes(tvbuff_t *tvb, guint offset, proto_tree *tree, guint
 
 
 static guint
-dissect_rdm_pd_sensor_definition(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_sensor_definition(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                                 guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -904,7 +972,8 @@ dissect_rdm_pd_sensor_definition(tvbuff_t *tvb, guint offset, proto_tree *tree, 
 }
 
 static guint
-dissect_rdm_pd_sensor_value(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_sensor_value(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                            guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -945,7 +1014,8 @@ dissect_rdm_pd_sensor_value(tvbuff_t *tvb, guint offset, proto_tree *tree, guint
 }
 
 static guint
-dissect_rdm_pd_manufacturer_label(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_manufacturer_label(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                                  guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -959,7 +1029,8 @@ dissect_rdm_pd_manufacturer_label(tvbuff_t *tvb, guint offset, proto_tree *tree,
 }
 
 static guint
-dissect_rdm_pd_disc_unique_branch(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_disc_unique_branch(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                                  guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_DISCOVERY_COMMAND:
@@ -977,7 +1048,8 @@ dissect_rdm_pd_disc_unique_branch(tvbuff_t *tvb, guint offset, proto_tree *tree,
 }
 
 static guint
-dissect_rdm_pd_disc_mute(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_disc_mute(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                         guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_DISCOVERY_COMMAND_RESPONSE:
@@ -996,7 +1068,8 @@ dissect_rdm_pd_disc_mute(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 c
 }
 
 static guint
-dissect_rdm_pd_disc_un_mute(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_disc_un_mute(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                            guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_DISCOVERY_COMMAND_RESPONSE:
@@ -1015,7 +1088,8 @@ dissect_rdm_pd_disc_un_mute(tvbuff_t *tvb, guint offset, proto_tree *tree, guint
 }
 
 static guint
-dissect_rdm_pd_proxied_devices(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_proxied_devices(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                               guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1032,7 +1106,8 @@ dissect_rdm_pd_proxied_devices(tvbuff_t *tvb, guint offset, proto_tree *tree, gu
 }
 
 static guint
-dissect_rdm_pd_proxied_device_count(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_proxied_device_count(tvbuff_t *tvb, guint offset, 
+                                    proto_tree *tree, guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1049,7 +1124,8 @@ dissect_rdm_pd_proxied_device_count(tvbuff_t *tvb, guint offset, proto_tree *tre
 }
 
 static guint
-dissect_rdm_pd_comms_status(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_comms_status(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                            guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1069,7 +1145,8 @@ dissect_rdm_pd_comms_status(tvbuff_t *tvb, guint offset, proto_tree *tree, guint
 }
 
 static guint
-dissect_rdm_pd_status_messages(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_status_messages(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                               guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -1108,7 +1185,8 @@ dissect_rdm_pd_status_messages(tvbuff_t *tvb, guint offset, proto_tree *tree, gu
 }
 
 static guint
-dissect_rdm_pd_status_id_description(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_status_id_description(tvbuff_t *tvb, guint offset, 
+                                     proto_tree *tree, guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -1128,18 +1206,23 @@ dissect_rdm_pd_status_id_description(tvbuff_t *tvb, guint offset, proto_tree *tr
 }
 
 static guint
-dissect_rdm_pd_clear_status_id(tvbuff_t *tvb _U_, guint offset, proto_tree *tree _U_, guint8 cc _U_, guint8 len _U_)
+dissect_rdm_pd_clear_status_id(tvbuff_t *tvb _U_, guint offset, 
+                               proto_tree *tree _U_, guint8 cc _U_, 
+                               guint8 len _U_)
 {
 	return offset;
 }
 
 static guint
-dissect_rdm_pd_sub_device_status_report_threshold(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_sub_device_status_report_threshold(tvbuff_t *tvb, guint offset, 
+                                                  proto_tree *tree, guint8 cc, 
+                                                  guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
 	case RDM_CC_GET_COMMAND_RESPONSE:
-		proto_tree_add_item(tree, hf_rdm_pd_sub_device_status_report_threshold_status_type, tvb,
+		proto_tree_add_item(tree, 
+        hf_rdm_pd_sub_device_status_report_threshold_status_type, tvb,
 			offset, 1, ENC_BIG_ENDIAN);
 		offset += 1;
 		break;
@@ -1149,7 +1232,8 @@ dissect_rdm_pd_sub_device_status_report_threshold(tvbuff_t *tvb, guint offset, p
 }
 
 static guint
-dissect_rdm_pd_supported_parameters(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_supported_parameters(tvbuff_t *tvb, guint offset, 
+                                    proto_tree *tree, guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1166,7 +1250,8 @@ dissect_rdm_pd_supported_parameters(tvbuff_t *tvb, guint offset, proto_tree *tre
 }
 
 static guint
-dissect_rdm_pd_parameter_description(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_parameter_description(tvbuff_t *tvb, guint offset, 
+                                     proto_tree *tree, guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -1216,7 +1301,8 @@ dissect_rdm_pd_parameter_description(tvbuff_t *tvb, guint offset, proto_tree *tr
 }
 
 static guint
-dissect_rdm_pd_product_detail_id_list(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_product_detail_id_list(tvbuff_t *tvb, guint offset, 
+                                      proto_tree *tree, guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1233,7 +1319,8 @@ dissect_rdm_pd_product_detail_id_list(tvbuff_t *tvb, guint offset, proto_tree *t
 }
 
 static guint
-dissect_rdm_pd_factory_defaults(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_factory_defaults(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                                guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1247,7 +1334,8 @@ dissect_rdm_pd_factory_defaults(tvbuff_t *tvb, guint offset, proto_tree *tree, g
 }
 
 static guint
-dissect_rdm_pd_language_capabilities(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_language_capabilities(tvbuff_t *tvb, guint offset, 
+                                     proto_tree *tree, guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1264,7 +1352,8 @@ dissect_rdm_pd_language_capabilities(tvbuff_t *tvb, guint offset, proto_tree *tr
 }
 
 static guint
-dissect_rdm_pd_language(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_language(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                        guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1279,7 +1368,8 @@ dissect_rdm_pd_language(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc
 }
 
 static guint
-dissect_rdm_pd_software_version_label(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_software_version_label(tvbuff_t *tvb, guint offset, 
+                                      proto_tree *tree, guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1294,7 +1384,9 @@ dissect_rdm_pd_software_version_label(tvbuff_t *tvb, guint offset, proto_tree *t
 }
 
 static guint
-dissect_rdm_pd_boot_software_version_id(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_boot_software_version_id(tvbuff_t *tvb, guint offset, 
+                                        proto_tree *tree, guint8 cc, 
+                                        guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1309,7 +1401,9 @@ dissect_rdm_pd_boot_software_version_id(tvbuff_t *tvb, guint offset, proto_tree 
 }
 
 static guint
-dissect_rdm_pd_boot_software_version_label(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_boot_software_version_label(tvbuff_t *tvb, guint offset, 
+                                           proto_tree *tree, guint8 cc, 
+                                           guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1324,7 +1418,8 @@ dissect_rdm_pd_boot_software_version_label(tvbuff_t *tvb, guint offset, proto_tr
 }
 
 static guint
-dissect_rdm_pd_dmx_personality(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_dmx_personality(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                               guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1347,7 +1442,9 @@ dissect_rdm_pd_dmx_personality(tvbuff_t *tvb, guint offset, proto_tree *tree, gu
 }
 
 static guint
-dissect_rdm_pd_dmx_personality_description(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_dmx_personality_description(tvbuff_t *tvb, guint offset, 
+                                           proto_tree *tree, guint8 cc, 
+                                           guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -1373,7 +1470,8 @@ dissect_rdm_pd_dmx_personality_description(tvbuff_t *tvb, guint offset, proto_tr
 }
 
 static guint
-dissect_rdm_pd_slot_info(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_slot_info(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                         guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1398,7 +1496,8 @@ dissect_rdm_pd_slot_info(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 c
 }
 
 static guint
-dissect_rdm_pd_slot_description(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_slot_description(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                                guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -1421,7 +1520,8 @@ dissect_rdm_pd_slot_description(tvbuff_t *tvb, guint offset, proto_tree *tree, g
 }
 
 static guint
-dissect_rdm_pd_slot_value(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_slot_value(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                          guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND_RESPONSE:
@@ -1442,7 +1542,8 @@ dissect_rdm_pd_slot_value(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 
 }
 
 static guint
-dissect_rdm_pd_record_sensors(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_record_sensors(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                              guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -1490,7 +1591,8 @@ dissect_rdm_pd_record_sensors(tvbuff_t *tvb, guint offset, proto_tree *tree, gui
 }
 
 static guint
-dissect_rdm_pd_lamp_state(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_lamp_state(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                          guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1505,7 +1607,8 @@ dissect_rdm_pd_lamp_state(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 
 }
 
 static guint
-dissect_rdm_pd_lamp_on_mode(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_lamp_on_mode(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                            guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1520,7 +1623,8 @@ dissect_rdm_pd_lamp_on_mode(tvbuff_t *tvb, guint offset, proto_tree *tree, guint
 }
 
 static guint
-dissect_rdm_pd_device_power_cycles(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_device_power_cycles(tvbuff_t *tvb, guint offset, 
+                                   proto_tree *tree, guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1535,7 +1639,8 @@ dissect_rdm_pd_device_power_cycles(tvbuff_t *tvb, guint offset, proto_tree *tree
 }
 
 static guint
-dissect_rdm_pd_display_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_display_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                              guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1550,7 +1655,8 @@ dissect_rdm_pd_display_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, gui
 }
 
 static guint
-dissect_rdm_pd_display_level(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_display_level(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                             guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1565,7 +1671,8 @@ dissect_rdm_pd_display_level(tvbuff_t *tvb, guint offset, proto_tree *tree, guin
 }
 
 static guint
-dissect_rdm_pd_pan_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_pan_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                          guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1580,7 +1687,8 @@ dissect_rdm_pd_pan_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 
 }
 
 static guint
-dissect_rdm_pd_tilt_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_tilt_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                           guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1595,7 +1703,8 @@ dissect_rdm_pd_tilt_invert(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8
 }
 
 static guint
-dissect_rdm_pd_pan_tilt_swap(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_pan_tilt_swap(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                             guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1610,7 +1719,8 @@ dissect_rdm_pd_pan_tilt_swap(tvbuff_t *tvb, guint offset, proto_tree *tree, guin
 }
 
 static guint
-dissect_rdm_pd_real_time_clock(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_real_time_clock(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                               guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1640,7 +1750,8 @@ dissect_rdm_pd_real_time_clock(tvbuff_t *tvb, guint offset, proto_tree *tree, gu
 }
 
 static guint
-dissect_rdm_pd_identify_device(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_identify_device(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                               guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1660,7 +1771,8 @@ dissect_rdm_pd_identify_device(tvbuff_t *tvb, guint offset, proto_tree *tree, gu
 }
 
 static guint
-dissect_rdm_pd_reset_device(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_reset_device(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                            guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1674,7 +1786,8 @@ dissect_rdm_pd_reset_device(tvbuff_t *tvb, guint offset, proto_tree *tree, guint
 }
 
 static guint
-dissect_rdm_pd_power_state(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_power_state(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                           guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1689,7 +1802,8 @@ dissect_rdm_pd_power_state(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8
 }
 
 static guint
-dissect_rdm_pd_perform_selftest(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_perform_selftest(tvbuff_t *tvb, guint offset, 
+                                proto_tree *tree, guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1709,7 +1823,8 @@ dissect_rdm_pd_perform_selftest(tvbuff_t *tvb, guint offset, proto_tree *tree, g
 }
 
 static guint
-dissect_rdm_pd_self_test_description(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len)
+dissect_rdm_pd_self_test_description(tvbuff_t *tvb, guint offset, 
+                                     proto_tree *tree, guint8 cc, guint8 len)
 {
 	switch(cc) {
 	case RDM_CC_GET_COMMAND:
@@ -1732,7 +1847,8 @@ dissect_rdm_pd_self_test_description(tvbuff_t *tvb, guint offset, proto_tree *tr
 }
 
 static guint
-dissect_rdm_pd_capture_preset(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_capture_preset(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                              guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1756,7 +1872,8 @@ dissect_rdm_pd_capture_preset(tvbuff_t *tvb, guint offset, proto_tree *tree, gui
 }
 
 static guint
-dissect_rdm_pd_preset_playback(tvbuff_t *tvb, guint offset, proto_tree *tree, guint8 cc, guint8 len _U_)
+dissect_rdm_pd_preset_playback(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                               guint8 cc, guint8 len _U_)
 {
 	switch(cc) {
 	case RDM_CC_SET_COMMAND:
@@ -1773,8 +1890,72 @@ dissect_rdm_pd_preset_playback(tvbuff_t *tvb, guint offset, proto_tree *tree, gu
 	return offset;
 }
 
+//Begin RDMNet Pids
 static guint
-dissect_rdm_mdb(tvbuff_t *tvb, packet_info *pinfo, guint offset, proto_tree *tree)
+dissect_rdm_pd_endpoint_list(tvbuff_t *tvb, guint offset, proto_tree *tree, 
+                             guint8 cc, guint8 len)
+{
+  proto_tree* endpoint_list_item = NULL;
+	proto_tree* endpoint_list_tree = NULL;
+  switch(cc) {
+	case RDM_CC_GET_COMMAND:
+    break;
+	case RDM_CC_GET_COMMAND_RESPONSE:
+		proto_tree_add_item(tree, hf_rdm_pd_endpoint_list_change_number, tvb,
+			offset, 4, ENC_BIG_ENDIAN);
+		offset += 4;
+    len -= 4;
+    while(len >= 2) {
+      proto_tree_add_item(tree, hf_rdm_pd_endpoint, tvb, offset, 2, 
+                          ENC_BIG_ENDIAN);
+        offset += 2;
+        len -= 2;
+    }
+		break;
+	}
+
+	return offset;
+}
+
+//Begin RDMNet Pids
+static guint
+dissect_rdm_pd_endpoint_to_universe(tvbuff_t *tvb, guint offset, 
+                                    proto_tree *tree, guint8 cc, guint8 len _U_)
+{
+  
+  switch(cc) {
+  case RDM_CC_SET_COMMAND:
+    proto_tree_add_item(tree, hf_rdm_pd_endpoint, tvb, offset,
+        2, ENC_BIG_ENDIAN);
+        offset += 2;
+    proto_tree_add_item(tree, hf_rdm_pd_universe, tvb, offset,
+        2, ENC_BIG_ENDIAN);
+        offset += 2;
+    break;
+	case RDM_CC_GET_COMMAND:
+    proto_tree_add_item(tree, hf_rdm_pd_endpoint, tvb, offset,
+      2, ENC_BIG_ENDIAN);
+      offset += 2;
+    break;
+	case RDM_CC_GET_COMMAND_RESPONSE:
+      proto_tree_add_item(tree, hf_rdm_pd_endpoint, tvb, offset,
+        2, ENC_BIG_ENDIAN);
+        offset += 2;
+      proto_tree_add_item(tree, hf_rdm_pd_universe, tvb, offset,
+        2, ENC_BIG_ENDIAN);
+        offset += 2;
+      proto_tree_add_item(tree, hf_rdm_pd_endpoint_physical, tvb, offset,
+        1, ENC_BIG_ENDIAN);
+        offset += 1;
+		break;
+	}
+
+	return offset;
+}
+
+static guint
+dissect_rdm_mdb(tvbuff_t *tvb, packet_info *pinfo, guint offset, 
+                proto_tree *tree)
 {
 	guint8	    cc;
 	guint16	    param_id;
@@ -1843,214 +2024,278 @@ dissect_rdm_mdb(tvbuff_t *tvb, packet_info *pinfo, guint offset, proto_tree *tre
 
 		switch(param_id) {
 		case RDM_PARAM_ID_SENSOR_VALUE:
-			offset = dissect_rdm_pd_sensor_value(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_sensor_value(tvb, offset, si, cc, 
+                                           parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_QUEUED_MESSAGE:
-			offset = dissect_rdm_pd_queued_message(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_queued_message(tvb, offset, si, cc, 
+                                             parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DMX_START_ADDRESS:
-			offset = dissect_rdm_pd_dmx_start_address(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_dmx_start_address(tvb, offset, si, cc, 
+                                                parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DEVICE_INFO:
-			offset = dissect_rdm_pd_device_info(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_device_info(tvb, offset, si, cc, 
+                                          parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DEVICE_MODEL_DESCRIPTION:
-			offset = dissect_rdm_pd_device_model_description(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_device_model_description(tvb, offset, si, cc, 
+                                                       parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DEVICE_LABEL:
-			offset = dissect_rdm_pd_device_label(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_device_label(tvb, offset, si, cc, 
+                                           parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DEVICE_HOURS:
-			offset = dissect_rdm_pd_device_hours(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_device_hours(tvb, offset, si, cc, 
+                                           parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_LAMP_HOURS:
-			offset = dissect_rdm_pd_lamp_hours(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_lamp_hours(tvb, offset, si, cc, 
+                                         parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_LAMP_STRIKES:
-			offset = dissect_rdm_pd_lamp_strikes(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_lamp_strikes(tvb, offset, si, cc, 
+                                           parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_SENSOR_DEFINITION:
-			offset = dissect_rdm_pd_sensor_definition(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_sensor_definition(tvb, offset, si, cc, 
+                                                parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_MANUFACTURER_LABEL:
-			offset = dissect_rdm_pd_manufacturer_label(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_manufacturer_label(tvb, offset, si, cc, 
+                                                 parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DISC_UNIQUE_BRANCH:
-			offset = dissect_rdm_pd_disc_unique_branch(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_disc_unique_branch(tvb, offset, si, cc, 
+                                                 parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DISC_MUTE:
-			offset = dissect_rdm_pd_disc_mute(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_disc_mute(tvb, offset, si, cc, 
+                                        parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DISC_UN_MUTE:
-			offset = dissect_rdm_pd_disc_un_mute(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_disc_un_mute(tvb, offset, si, cc, 
+                                           parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_PROXIED_DEVICES:
-			offset = dissect_rdm_pd_proxied_devices(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_proxied_devices(tvb, offset, si, cc, 
+                                              parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_PROXIED_DEVICE_COUNT:
-			offset = dissect_rdm_pd_proxied_device_count(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_proxied_device_count(tvb, offset, si, cc, 
+                                                   parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_COMMS_STATUS:
-			offset = dissect_rdm_pd_comms_status(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_comms_status(tvb, offset, si, cc, 
+                                           parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_STATUS_MESSAGES:
-			offset = dissect_rdm_pd_status_messages(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_status_messages(tvb, offset, si, cc, 
+                                              parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_STATUS_ID_DESCRIPTION:
-			offset = dissect_rdm_pd_status_id_description(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_status_id_description(tvb, offset, si, cc, 
+                                                    parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_CLEAR_STATUS_ID:
-			offset = dissect_rdm_pd_clear_status_id(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_clear_status_id(tvb, offset, si, cc, 
+                                              parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_SUB_DEVICE_STATUS_REPORT_THRESHOLD:
-			offset = dissect_rdm_pd_sub_device_status_report_threshold(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_sub_device_status_report_threshold(tvb, offset, 
+          si, 
+          cc, 
+          parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_SUPPORTED_PARAMETERS:
-			offset = dissect_rdm_pd_supported_parameters(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_supported_parameters(tvb, offset, si, cc, 
+                                                   parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_PARAMETER_DESCRIPTION:
-			offset = dissect_rdm_pd_parameter_description(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_parameter_description(tvb, offset, si, cc, 
+                                                    parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_PRODUCT_DETAIL_ID_LIST:
-			offset = dissect_rdm_pd_product_detail_id_list(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_product_detail_id_list(tvb, offset, si, cc, 
+                                                     parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_FACTORY_DEFAULTS:
-			offset = dissect_rdm_pd_factory_defaults(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_factory_defaults(tvb, offset, si, cc, 
+                                               parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_LANGUAGE_CAPABILITIES:
-			offset = dissect_rdm_pd_language_capabilities(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_language_capabilities(tvb, offset, si, cc, 
+                                                    parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_LANGUAGE:
-			offset = dissect_rdm_pd_language(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_language(tvb, offset, si, cc, 
+                                       parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_SOFTWARE_VERSION_LABEL:
-			offset = dissect_rdm_pd_software_version_label(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_software_version_label(tvb, offset, si, cc, 
+                                                     parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_BOOT_SOFTWARE_VERSION_ID:
-			offset = dissect_rdm_pd_boot_software_version_id(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_boot_software_version_id(tvb, offset, si, cc, 
+                                                       parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_BOOT_SOFTWARE_VERSION_LABEL:
-			offset = dissect_rdm_pd_boot_software_version_label(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_boot_software_version_label(tvb, offset, si, cc, 
+          parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DMX_PERSONALITY:
-			offset = dissect_rdm_pd_dmx_personality(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_dmx_personality(tvb, offset, si, cc, 
+                                              parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DMX_PERSONALITY_DESCRIPTION:
-			offset = dissect_rdm_pd_dmx_personality_description(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_dmx_personality_description(tvb, offset, si, cc, 
+          parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_SLOT_INFO:
-			offset = dissect_rdm_pd_slot_info(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_slot_info(tvb, offset, si, cc, 
+                                        parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_SLOT_DESCRIPTION:
-			offset = dissect_rdm_pd_slot_description(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_slot_description(tvb, offset, si, cc, 
+                                               parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DEFAULT_SLOT_VALUE:
-			offset = dissect_rdm_pd_slot_value(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_slot_value(tvb, offset, si, cc, 
+                                         parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_RECORD_SENSORS:
-			offset = dissect_rdm_pd_record_sensors(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_record_sensors(tvb, offset, si, cc, 
+                                             parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_LAMP_STATE:
-			offset = dissect_rdm_pd_lamp_state(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_lamp_state(tvb, offset, si, cc, 
+                                         parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_LAMP_ON_MODE:
-			offset = dissect_rdm_pd_lamp_on_mode(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_lamp_on_mode(tvb, offset, si, cc, 
+                                           parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DEVICE_POWER_CYCLES:
-			offset = dissect_rdm_pd_device_power_cycles(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_device_power_cycles(tvb, offset, si, cc, 
+                                                  parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DISPLAY_INVERT:
-			offset = dissect_rdm_pd_display_invert(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_display_invert(tvb, offset, si, cc, 
+                                             parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_DISPLAY_LEVEL:
-			offset = dissect_rdm_pd_display_level(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_display_level(tvb, offset, si, cc, 
+                                            parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_PAN_INVERT:
-			offset = dissect_rdm_pd_pan_invert(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_pan_invert(tvb, offset, si, cc, 
+                                         parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_TILT_INVERT:
-			offset = dissect_rdm_pd_tilt_invert(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_tilt_invert(tvb, offset, si, cc, 
+                                          parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_PAN_TILT_SWAP:
-			offset = dissect_rdm_pd_pan_tilt_swap(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_pan_tilt_swap(tvb, offset, si, cc, 
+                                            parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_REAL_TIME_CLOCK:
-			offset = dissect_rdm_pd_real_time_clock(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_real_time_clock(tvb, offset, si, cc, 
+                                              parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_IDENTIFY_DEVICE:
-			offset = dissect_rdm_pd_identify_device(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_identify_device(tvb, offset, si, cc, 
+                                             parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_RESET_DEVICE:
-			offset = dissect_rdm_pd_reset_device(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_reset_device(tvb, offset, si, cc, 
+                                           parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_POWER_STATE:
-			offset = dissect_rdm_pd_power_state(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_power_state(tvb, offset, si, cc, 
+                                          parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_PERFORM_SELFTEST:
-			offset = dissect_rdm_pd_perform_selftest(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_perform_selftest(tvb, offset, si, cc, 
+                                               parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_SELF_TEST_DESCRIPTION:
-			offset = dissect_rdm_pd_self_test_description(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_self_test_description(tvb, offset, si, cc, 
+                                                    parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_CAPTURE_PRESET:
-			offset = dissect_rdm_pd_capture_preset(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_capture_preset(tvb, offset, si, cc, 
+                                             parameter_data_length);
 			break;
 
 		case RDM_PARAM_ID_PRESET_PLAYBACK:
-			offset = dissect_rdm_pd_preset_playback(tvb, offset, si, cc, parameter_data_length);
+			offset = dissect_rdm_pd_preset_playback(tvb, offset, si, cc, 
+                                              parameter_data_length);
 			break;
-
-		default:
+      
+    case RDM_PARAM_ID_ENDPOINT_LIST:
+      offset = dissect_rdm_pd_endpoint_list(tvb, offset, si, cc, 
+                                            parameter_data_length);
+      break;
+      
+		case RDM_PARAM_ID_ENDPOINT_TO_UNIVERSE:
+      offset = dissect_rdm_pd_endpoint_to_universe(tvb, offset, si, cc, 
+                                                   parameter_data_length);
+      break;
+      
+    default:
 			proto_tree_add_item(si, hf_rdm_parameter_data_raw, tvb,
 				offset, parameter_data_length, ENC_NA);
 			offset += parameter_data_length;
@@ -2435,6 +2680,26 @@ proto_register_rdm(void)
 				FT_UINT8, BASE_HEX, NULL, 0x0,
 				NULL, HFILL }},
 
+    { &hf_rdm_pd_endpoint,
+			{ "Endpoint", "rdm.pd.endpoint",
+				FT_UINT16, BASE_DEC, NULL, 0x0,
+				NULL, HFILL }},
+        
+    { &hf_rdm_pd_universe,
+			{ "Universe", "rdm.pd.universe",
+				FT_UINT16, BASE_DEC, NULL, 0x0,
+				NULL, HFILL }},
+    
+    { &hf_rdm_pd_endpoint_physical,
+			{ "Physical", "rdm.pd.physical",
+				FT_BOOLEAN, BASE_DEC, NULL, 0x0, //Add Values
+				NULL, HFILL }},
+        
+    { &hf_rdm_pd_endpoint_list_change_number,
+			{ "List Change Number", "rdm.pd.endpoint_list_change",
+				FT_UINT32, BASE_DEC, NULL, 0x0,
+				NULL, HFILL }},
+        
 		{ &hf_rdm_pd_disc_unmute_binding_uid,
 			{ "Binding UID", "rdm.pd.disc_unmute.binding_uid",
 				FT_BYTES, BASE_NONE, NULL, 0x0,
@@ -2494,7 +2759,7 @@ proto_register_rdm(void)
 			{ "Lamp On Mode", "rdm.pd.lamp_on_mode",
 				FT_UINT8, BASE_HEX, NULL, 0x0,
 				NULL, HFILL }},
-
+        
 		{ &hf_rdm_pd_device_power_cycles,
 			{ "Device Power Cycles", "rdm.pd.device_power_cycles",
 				FT_UINT32, BASE_DEC, NULL, 0x0,

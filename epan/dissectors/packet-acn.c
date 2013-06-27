@@ -265,6 +265,11 @@ static gint ett_acn_dmx_data_pdu = -1;
 static gint ett_acn_dmx_pdu = -1;
 
 static gint ett_acn_rdmnet = -1;
+static gint ett_rdmnet_data = -1;
+static gint ett_rdmnet_status = -1;
+static gint ett_rdmnet_controller = -1;
+static gint ett_rdmnet_controller_data = -1;
+static gint ett_rdmnet_device_list = -1;
 
 /*Dissector Handles*/
 static dissector_handle_t rdm_handle;
@@ -323,6 +328,8 @@ static int hf_acn_rdmnet_sequence_num = -1;
 static int hf_acn_rdmnet_endpoint_num = -1;
 static int hf_acn_rdmnet_reserved = -1;
 static int hf_acn_rdmnet_data_vector = -1;
+static int hf_acn_rdmnet_controller_vector = -1;
+static int hf_acn_rdmnet_controller_device_list = -1;
 static int hf_acn_rdmnet_status = -1;
 static int hf_acn_rdmnet_status_str = -1;
 static int hf_acn_reason_code = -1;
@@ -452,6 +459,13 @@ static const value_string acn_rdmnet_status_vals[] ={
   {ACN_E133_STATUS_ACK_OVERFLOW_IN_PROGRESS,  "RDMNet Overflow in progress"},
   {ACN_E133_STATUS_BROADCAST_COMPLETE,  "RDM Broadcast/Vendorcast complete"},
   { 0,       NULL },
+};
+
+static const value_string acn_rdmnet_controller_vector_vals[] = {
+  {ACN_E133_CONTROLLER_FETCH_DEVICES,  "Controller Fetch Devices"},
+  {ACN_E133_CONTROLLER_DEVICE_AQUIRED,  "Controller Device Aquired"},
+  {ACN_E133_CONTROLLER_DEVICE_RELEASED,  "Controller Device Released"},
+  {ACN_E133_CONTROLLER_EXPECT_MASTER,  "Controller Expect Master"},
 };
 
 static const value_string acn_dmp_vector_vals[] = {
@@ -2640,6 +2654,153 @@ dissect_acn_sdt_base_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, in
 }
 
 /******************************************************************************/
+/* creates a new item in the tree and grabs the rest of the data in a pdu     */
+/* and iterprets it as ipv4 addresses                                         */
+void 
+rdmnet_show_device_list(tvbuff_t *tvb,
+                        proto_tree *tree,
+                        guint32 *data_offset,
+                        guint32 pdu_length)
+{
+  proto_item *device_list_item;
+  proto_tree *device_list_tree;
+  
+  device_list_item = proto_tree_add_string(tree, hf_acn_pdu_flags, tvb, 0, 0, "Device List");
+  device_list_tree = proto_item_add_subtree(device_list_item, ett_rdmnet_device_list);
+  
+  while(pdu_length - *data_offset >= 4){
+    proto_tree_add_item(tree, hf_acn_ipv4, tvb, *data_offset, 4, ENC_BIG_ENDIAN);
+    *data_offset += 4;
+  }
+  return;
+}
+
+/******************************************************************************/
+/* Dissect RDMNet Data Controller Layer                                       */
+static guint32
+dissect_acn_rdmnet_controller_pdu(tvbuff_t *tvb, 
+                                  packet_info *pinfo, 
+                                  proto_tree *tree, 
+                                  int offset, 
+                                  acn_pdu_offsets *last_pdu_offsets)
+{
+  /* common to all pdu */
+  guint8           pdu_flags;
+  guint32          pdu_start;
+  guint32          pdu_length;
+  guint32          pdu_flvh_length; /* flags, length, vector, header */
+  acn_pdu_offsets  pdu_offsets = {0,0,0,0,0};
+  guint8           octet;
+  guint32          length1;
+  guint32          length2;
+  guint32          length3;
+  guint32          vector_offset;
+  guint32          data_offset;
+  guint32          data_length;
+  
+  proto_item      *ti, *pi;
+  proto_tree      *pdu_tree    = NULL;
+  proto_tree      *flag_tree   = NULL;
+
+  const char      *name;
+  
+/* this pdu */
+  guint8          vector;
+
+  /* save start of pdu block */
+  pdu_start = offset;
+  pdu_offsets.start = pdu_start;
+
+  /* get PDU flags and length flag first */
+  octet     = tvb_get_guint8(tvb, offset++);
+  pdu_flags = octet & 0xf0;
+  length1   = octet & 0x0f;     /* bottom 4 bits only */
+  length2   = tvb_get_guint8(tvb, offset++);
+
+  /* if length flag is set, then we have a 20 bit length else we have a 12 bit */
+  /* flvh = flags, length, vector, header */
+  if (pdu_flags & ACN_PDU_FLAG_L) {
+    length3 = tvb_get_guint8(tvb, offset);
+    offset += 1;
+    pdu_length = length3 | (length2 << 8) | (length1 << 16);
+    pdu_flvh_length = 3;
+  } else {
+    pdu_length = length2 | (length1 << 8);
+    pdu_flvh_length = 2;
+  }
+
+  /* offset should now be pointing to vector (if one exists) */
+
+  /* Add pdu item and tree */
+  ti = proto_tree_add_item(tree, hf_acn_pdu, tvb, pdu_start, pdu_length, ENC_NA);
+  pdu_tree = proto_item_add_subtree(ti, ett_rdmnet_controller);
+
+  /* Add flag item and tree */
+  pi = proto_tree_add_uint(pdu_tree, hf_acn_pdu_flags, tvb, pdu_start, 1, pdu_flags);
+  flag_tree = proto_item_add_subtree(pi, ett_acn_pdu_flags);
+  proto_tree_add_item(flag_tree, hf_acn_pdu_flag_l, tvb, pdu_start, 1, ENC_BIG_ENDIAN);
+  proto_tree_add_item(flag_tree, hf_acn_pdu_flag_v, tvb, pdu_start, 1, ENC_BIG_ENDIAN);
+  proto_tree_add_item(flag_tree, hf_acn_pdu_flag_h, tvb, pdu_start, 1, ENC_BIG_ENDIAN);
+  proto_tree_add_item(flag_tree, hf_acn_pdu_flag_d, tvb, pdu_start, 1, ENC_BIG_ENDIAN);
+
+  /* Add PDU Length item */
+  proto_tree_add_uint(pdu_tree, hf_acn_pdu_length, tvb, pdu_start, pdu_flvh_length, pdu_length);
+
+  /* Set vector offset */
+  if (pdu_flags & ACN_PDU_FLAG_V) {
+    /* use new values */
+    vector_offset = offset;
+    last_pdu_offsets->vector = offset;
+    offset          += 1;
+    pdu_flvh_length += 1;
+  } else {
+    /* use last values */
+    vector_offset = last_pdu_offsets->vector;
+  }
+  /* offset should now be pointing to header (if one exists) */
+
+  /* Add Vector item */
+  vector = tvb_get_guint8(tvb, vector_offset);
+  proto_tree_add_item(pdu_tree, hf_acn_rdmnet_data_vector, tvb, vector_offset, 2, ENC_BIG_ENDIAN);
+  /* vector_offset +=4; */
+
+  /* Add Vector item to tree*/
+  name = val_to_str(vector, acn_rdmnet_controller_vector_vals, "not valid (%d)");
+  proto_item_append_text(ti, ": %s", name);
+  
+  /* offset should now be pointing to data (if one exists) */
+  /* Adjust data */
+  if (pdu_flags & ACN_PDU_FLAG_D) {
+    /* use new values */
+    data_offset = offset;
+    data_length = pdu_length - pdu_flvh_length;
+    last_pdu_offsets->data = offset;
+    last_pdu_offsets->data_length = data_length;
+  } else {
+    /* use last values */
+    data_offset = last_pdu_offsets->data;
+    /*data_length = last_pdu_offsets->data_length;*/
+  }
+  
+  switch(vector){
+    case ACN_E133_CONTROLLER_FETCH_DEVICES:
+      break;
+    case ACN_E133_CONTROLLER_DEVICE_LIST:
+        rdmnet_show_device_list(tvb, pdu_tree, &data_offset, pdu_length);
+      break;
+    case ACN_E133_CONTROLLER_DEVICE_AQUIRED:
+      break;
+    case ACN_E133_CONTROLLER_DEVICE_RELEASED:
+      break;
+    case ACN_E133_CONTROLLER_EXPECT_MASTER:
+      break;
+    default:
+      break;
+  }
+  return pdu_start + pdu_length;
+}
+
+/******************************************************************************/
 /* Dissect RDMNet Status                                               */
 static guint32
 dissect_acn_rdmnet_status_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, int offset, acn_pdu_offsets *last_pdu_offsets)
@@ -2694,7 +2855,7 @@ dissect_acn_rdmnet_status_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
 
   /* Add pdu item and tree */
   ti = proto_tree_add_item(tree, hf_acn_pdu, tvb, pdu_start, pdu_length, ENC_NA);
-  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu); /* todo: Change to ett rdmnet pdu */
+  pdu_tree = proto_item_add_subtree(ti, ett_rdmnet_status);
   col_add_str(pinfo->cinfo, COL_INFO, "Status");
 
   /* Add flag item and tree */
@@ -2819,7 +2980,7 @@ dissect_acn_rdmnet_data_pdu(tvbuff_t *tvb,
 
   /* Add pdu item and tree */
   ti = proto_tree_add_item(tree, hf_acn_pdu, tvb, pdu_start, pdu_length, ENC_NA);
-  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu); /* todo: Change to ett rdmnet pdu */
+  pdu_tree = proto_item_add_subtree(ti, ett_rdmnet_data); /* todo: Change to ett rdmnet pdu */
 
   /* Add flag item and tree */
   pi = proto_tree_add_uint(pdu_tree, hf_acn_pdu_flags, tvb, pdu_start, 1, pdu_flags);
@@ -2946,8 +3107,8 @@ dissect_acn_rdmnet_pdu(tvbuff_t *tvb,
   /* offset should now be pointing to vector (if one exists) */
 
   /* Add pdu item and tree */
-  ti = proto_tree_add_item(tree, hf_acn_pdu, tvb, pdu_start, pdu_length, ENC_NA);
-  pdu_tree = proto_item_add_subtree(ti, ett_acn_dmx_pdu); /* todo: Change to ett rdmnet pdu */
+  ti = proto_tree_add_item(base_tree, hf_acn_pdu, tvb, pdu_start, pdu_length, ENC_NA);
+  pdu_tree = proto_item_add_subtree(ti, ett_acn_rdmnet);
 
   /* Add flag item and tree */
   pi = proto_tree_add_uint(pdu_tree, hf_acn_pdu_flags, tvb, pdu_start, 1, pdu_flags);
@@ -3032,6 +3193,8 @@ dissect_acn_rdmnet_pdu(tvbuff_t *tvb,
     case ACN_E133_FRAMING_STATUS:
       data_offset = dissect_acn_rdmnet_status_pdu(tvb, pinfo, pdu_tree, data_offset, &pdu_offsets);
       break;
+    case ACN_E133_FRAMING_CONTROLLER:
+      data_offset = dissect_acn_rdmnet_controller_pdu(tvb, pinfo, pdu_tree, data_offset, &pdu_offsets);
     default:
       break;
   }
@@ -3659,6 +3822,20 @@ proto_register_acn(void)
         NULL, HFILL }
     },
     
+    /*RDMNet Controller Numbers*/
+    { &hf_acn_rdmnet_controller_vector,
+      { "Vector", "acn.rdmnet.controller.vector",
+        FT_UINT16, BASE_DEC, VALS(acn_rdmnet_controller_vector_vals), 0x0,
+        NULL, HFILL }
+    },
+    
+    /*RDMNet Controller Device List*/
+    { &hf_acn_rdmnet_controller_device_list,
+      { "Device List", "acn.rdmnet.device_list",
+        FT_STRING, BASE_NONE, NULL, 0x0,
+        NULL, HFILL }
+    },
+    
     /* RDMNet Data Vector*/
     { &hf_acn_rdmnet_data_vector,
       { "Vector", "acn.rdmnet.data_vector",
@@ -3875,10 +4052,17 @@ proto_register_acn(void)
     &ett_acn_dmx_address,
     &ett_acn_dmx_2_options,
     &ett_acn_dmx_data_pdu,
-    &ett_acn_dmx_pdu//,
-    //&ett_acn_rdmnet
+    &ett_acn_dmx_pdu,
+    &ett_acn_rdmnet,
+    &ett_rdmnet_data,
+    &ett_rdmnet_status,
+    &ett_rdmnet_controller
   };
 
+  static gint *rdmnet_ett[] = {
+    &ett_acn_rdmnet
+  };
+  
   module_t *acn_module;
   proto_acn = proto_register_protocol (
     "Architecture for Control Networks", /* name */
@@ -3928,7 +4112,6 @@ proto_register_acn(void)
                                  &global_acn_dmx_display_line_format,
                                  dmx_display_line_format,
                                  TRUE);
-  
   return;
 }
 
