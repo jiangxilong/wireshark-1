@@ -243,7 +243,7 @@ typedef struct
 /* forward reference */
 static guint32 acn_add_address(tvbuff_t *tvb, packet_info *pinfo _U_, proto_tree *tree, int offset, const char *label);
 static int     dissect_acn(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree);
-static int     dissect_acn_tcp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree);
+static int     dissect_acn_tcp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data);
 
 /* Global variables */
 static int proto_acn = -1;
@@ -588,9 +588,12 @@ dissect_acn_heur( tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *dat
 
 /******************************************************************************/
 /* This function returns the PDU Block size from the TCP Preample             */
-static guint32 acn_get_tcp_packet_size(packet_info* pinfo, tvbuff_t *tvb, int offset)
+static guint
+acn_get_tcp_packet_size(packet_info* pinfo, tvbuff_t *tvb, int offset)
 {
-  return tvb_get_ntohl(tvb, offset + 16) + ACN_TCP_PREAMBLE_SIZE;
+  // TODO: Sean, this is bad, really bad, Need to modify wireshark to accept
+  // 32 bit length packets 
+  return (guint16)tvb_get_ntohl(tvb, offset + 16) + ACN_TCP_PREAMBLE_SIZE;
 }
 
 /******************************************************************************/
@@ -598,7 +601,7 @@ static guint32 acn_get_tcp_packet_size(packet_info* pinfo, tvbuff_t *tvb, int of
 static gboolean
 dissect_acn_heur_tcp( tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void *data _U_ )
 {
-  /* This is a heuristic dissector, which means we get all the UDP
+  /* This is a heuristic dissector, which means we get all the TCP
    * traffic not sent to a known dissector and not claimed by
    * a heuristic dissector called before us!
    */
@@ -611,7 +614,7 @@ dissect_acn_heur_tcp( tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void 
 
   /* else, dissect it */
   tcp_dissect_pdus(tvb, pinfo, tree, TRUE, ACN_TCP_PREAMBLE_SIZE, 
-                   &acn_get_tcp_packet_size, dissect_acn_tcp);
+                   &acn_get_tcp_packet_size, &dissect_acn_tcp, NULL);
   return TRUE;
 }
 
@@ -2909,9 +2912,12 @@ dissect_acn_rdmnet_status_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
   }
   
   if(data_length > 0){
-    proto_tree_add_item(pdu_tree, hf_acn_rdmnet_status_str, tvb, data_offset, data_length, ENC_ASCII);
+    proto_tree_add_item(pdu_tree, hf_acn_rdmnet_status_str, tvb, data_offset, 
+        data_length, ENC_ASCII);
     
-    status_str = tvb_get_string(tvb, data_offset, data_length);
+    status_str = tvb_get_string_enc(wmem_packet_scope(), tvb, data_offset, 
+        data_length, ENC_ASCII);
+
     if(status_str) {
       col_append_sep_str(pinfo->cinfo, COL_INFO, ", ", status_str);
       g_free(status_str);
@@ -2924,9 +2930,9 @@ dissect_acn_rdmnet_status_pdu(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tre
 /* Dissect RDMNet Data Layer                                                  */
 static guint32
 dissect_acn_rdmnet_data_pdu(tvbuff_t *tvb, 
-                            packet_info *pinfo, 
-                            proto_tree *tree, 
-                            int offset, 
+                            packet_info *pinfo,
+                            proto_tree *tree,
+                            int offset,
                             acn_pdu_offsets *last_pdu_offsets,
                             proto_tree *base_tree)
 {
@@ -3315,12 +3321,13 @@ dissect_acn_root_pdu(tvbuff_t *tvb,
 
             /* get Header (CID) 16 bytes */
             tvb_get_guid(tvb, header_offset, &guid, ENC_BIG_ENDIAN);
-            proto_item_append_text(ti, ", Src: %s", guid_to_str(&guid));
+            proto_item_append_text(ti, ", Src: %s", guid_to_ep_str(&guid));
 
             /* add cid to info */
-            col_add_fstr(pinfo->cinfo,COL_INFO, "CID %s", guid_to_str(&guid));
+            col_add_fstr(pinfo->cinfo,COL_INFO, "CID %s", guid_to_ep_str(&guid));
 
-            proto_tree_add_item(pdu_tree, hf_acn_cid, tvb, header_offset, 16, ENC_BIG_ENDIAN);
+            proto_tree_add_item(pdu_tree, hf_acn_cid, tvb, header_offset, 16,
+                ENC_BIG_ENDIAN);
             /*header_offset += 16;*/
             
             /* Adjust data */
@@ -3498,7 +3505,7 @@ dissect_acn(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
 /******************************************************************************/
 /* Dissect ACN                                                                */
 static int
-dissect_acn_tcp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
+dissect_acn_tcp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree, void* data)
 {
   proto_item      *ti          = NULL;
   proto_tree      *acn_tree    = NULL;
@@ -3506,6 +3513,7 @@ dissect_acn_tcp(tvbuff_t *tvb, packet_info *pinfo, proto_tree *tree)
   guint32          old_offset;
   guint32          end_offset;
   acn_pdu_offsets  pdu_offsets = {0,0,0,0,0};
+  (void)data;
 
 /*   if (!is_acn(tvb)) { */
 /*     return 0;         */
